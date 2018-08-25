@@ -1,0 +1,343 @@
+---
+title: "Analysis of the data published by Sun, M. et.al (2013)"
+author: "Aliaksandr Damenikan"
+date: "July-August 2018"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+## Goal
+
+The data published by Sun, M. et.al contains results of a large scale experiment aiming at identifying (i) total RNA abundance, (ii) synthesis rates (SR) and (iii) degradation rates changes of 4305 genes of S.cerevisiae in 47 strains bearing mutations in genes involved in RNA processing and degradation. The goal of this analysis was to dissect the data and identify behaviour of the genes we are currently interested in as well as attempt to find new patterns in the whole dataset. 
+
+The data was published in:
+
+    Sun, M., Schwalb, B., Pirkl, N., Maier, K. C., Schenk, A., Failmezger, H., … Cramer, P. (2013). Global analysis of Eukaryotic mRNA degradation reveals Xrn1-dependent buffering of transcript levels. Molecular Cell, 52(1), 52–62. https://doi.org/10.1016/j.molcel.2013.09.010
+
+
+```{r}
+# loading required packages
+library(tidyverse)
+library(ggplot2)
+library(pheatmap)
+library(plotly)
+library(e1071)
+library(pheatmap)
+library(topGO)
+GOLib <- "org.Sc.sgd.db" # need string as argument to topGO functions
+library(package=GOLib,
+        character.only = TRUE) # GO annotation from Saccharomyces Genome Database
+
+# these are indices for the columns of interest for the first mutant (first columns containing variables of interest, see below)
+col_ind <- c(9, 10, 11, 12, 13, 14)  
+
+# The original table also contains additional information on WT strains, but I desided to
+# to pick only the variables listed below. If you want to pick other variables as well, please 
+# modify col_ind vector (see above) and add desired name to the vector below (preserve the order as 
+# in the original table)
+variables <- c("LogFold", "t-value", "p-value", "adjusted p-value", "B-value", "Significance")
+
+# the function below creates a vector containing indices for all the columns we want to include (all the mutant strains)
+# pace value sets up the interval between the columns with the same information for different strains
+neces_columns <- function(data, min_cols, strns, pace) {
+  mincol_len <- length(min_cols)
+  for (i in 1:(length(strns)-1)) {
+    min_cols <- c(min_cols, (i*pace + min_cols[1:mincol_len])) 
+  }
+  return(min_cols)
+}
+
+# strains used in the study (in the same order as they are in the original data)
+strains <- c('air1', 'air2', 'bud13', 'ccr4', 'caf40', 'cth1', 'dcs1', 'dcs2', 'dhh1', 'dom34', 'ec2s', 'edc1', 'edc3', 'esc1', 'hbs1', 'lsm1', 'lsm6', 'lsm7', 'not3', 'pan2', 'pan3', 'pop2s', 'pat1s', 'pub1', 'puf1', 'puf2', 'puf3', 'puf4', 'puf5', 'puf6', 'rrp47s', 'rai1', 'rrp6s', 'rtt103', 'scd6', 'ski2', 'ski3', 'ski7', 'ski8', 'swt1', 'tex1', 'thp2', 'tpa1', 'upf2', 'upf3', 'xrn1pm', 'xrn1ns')
+
+
+
+# reading the raw supplementary table files, extracting only columns of interest and writing contracted data files into separate files
+
+# function to reformat the data from the supplements of the paper into a "tidy"" looking table
+tideit <- function(df, var_vec, strain_vec) {
+  # tmp_mtr1 holds all the information from the provided df
+  # without the first two columns with gene identifiers and names
+  tmp_mtr1 <- df[, (ncol(df)-(length(var_vec)*length(strain_vec))+1):ncol(df)]
+  
+  # tmp_mtr2 holds the same information as tmp_mtr1 but contains only single columns 
+  # for all the provided variables (var_vec), which is opposite to sepparate variables\
+  # columns for each of the strain in the original data.
+  tmp_vec <- as.vector(t(tmp_mtr1))
+  tmp_mtr2 <- matrix(tmp_vec, ncol=length(var_vec), byrow=T)
+  colnames(tmp_mtr2) <- var_vec
+  
+  # creating a data.frame and adding missing "ORF", "Gene", "Strain"" columns
+  tmp_df <- data.frame(tmp_mtr2)
+  tmp_df$ORF <- rep(df$orf, times=1, each=length(strain_vec))
+  tmp_df$Gene <- rep(df$gene, times=1, each=length(strain_vec))
+  tmp_df$Strain <- rep(strain_vec, times=length(df$gene))
+  
+  # changing all the commas as decimal separator to dots
+  tmp_df$LogFold <- as.numeric(gsub(",", ".", tmp_df$LogFold))
+  tmp_df$t.value <- as.numeric(gsub(",", ".", tmp_df$t.value))
+  tmp_df$p.value <- as.numeric(gsub(",", ".", tmp_df$p.value))
+  tmp_df$adjusted.p.value <- as.numeric(gsub(",", ".", tmp_df$adjusted.p.value))
+  tmp_df$B.value <- as.numeric(gsub(",", ".", tmp_df$B.value))
+  tmp_df$Log2Fold <- tmp_df$LogFold/0.6931472
+  #print(tmp_df)
+  return(tmp_df)
+}
+
+# totlev_data - total mRNA levels
+totlev_data <- read_tsv("sun_s3.txt")
+totlev_data <- totlev_data[ , c(1, 2, neces_columns(totlev_data, col_ind, strains, 12))]
+totlev_data_tid <- tideit(totlev_data, variables, strains)
+write_tsv(totlev_data_tid, "Total_RNA_level(s3)_tidy.tsv")
+
+# sr_data - mRNA synthesis rate data
+sr_data <- read_tsv("sun_s4.txt")
+sr_data <- sr_data[ , c(1, 2, neces_columns(sr_data, col_ind, strains, 12))]
+sr_data_tid <- tideit(sr_data, variables, strains)
+write_tsv(sr_data_tid, "SR(s4)_tidy.tsv")
+
+# dr_data - mRNA degradation rate data
+dr_data <- read_tsv("sun_s5.txt")
+dr_data <- dr_data[ , c(1, 2, neces_columns(dr_data, col_ind, strains, 12))]
+dr_data_tid <- tideit(dr_data, variables, strains)
+write_tsv(dr_data_tid, "DR(s5)_tidy.tsv")
+
+# read a heat shock genes table provided by Edward Wallace
+hs_table <- read_tsv("heat-shock-42C-up-genes-auto-annot.txt")
+hs_genes_orfs <- hs_table$orf # heat shock genes as unified names
+hs_genes_names <- hs_table$gene # heat shock genes as gene names
+
+# creating a table with a 'unified_name (orf) - gene name (gene)' key-value pairs
+orf2names_table <- read_tsv("scer-mrna-protein-absolute-estimate.txt")
+orf2names_table <- orf2names_table[, c("orf", "gene")]
+
+
+```
+
+```{r}
+#didn't want to change the name of the variables, so just update them with tidy-format tables
+total_data <- totlev_data_tid 
+dr_data <- dr_data_tid 
+sr_data <- sr_data_tid
+
+
+# mygenes holds names for those genes we had primers for at the start of August
+mygenes <- c('PUS7', 'RPA190', 'URA3', 'PMA1', 'CLN2', 'HSP26', 'PAB1', 'PGK1', 'RPS3', 'SRO9', 'SUN4', 'TOS6', 'FES1', 'TEF4', 'ARR2', 'ALG9', 'SSA4', 'SSD1', 'PYK1', 'EFB1', 'HSP104', 'HSP78', 'HRB1', 'ACT1', 'MFA1', 'RPS13', 'RPL28', 'RPL39', 'RPS30A', 'RTC3', 'RPS15', 'HHT2', 'HTB2', 'HOR7', 'HSP12', 'RPS31B', 'HSP30')
+
+# myrps holds all the ribosomal protein gene names, maey be not full
+myrps = c('RPS0A', 'RPS0B', 'RPS2', 'RPS3', 'RPS1A', 'RPS1B', 'RPS4A', 'RPS4B', 'RPS5', 'RPS6A', 'RPS6B', 'RPS7A', 'RPS7B', 'RPS8A', 'RPS8B', 'RPS9A', 'RPS9B', 'RPS10A', 'RPS10B', 'RPS11A', 'RPS11B', 'RPS12', 'RPS13', 'RPS14A', 'RPS14B', 'RPS15', 'RPS22A', 'RPS22B', 'RPS16A', 'RPS16B', 'RPS17A', 'RPS17B', 'RPS18A', 'RPS18B', 'RPS19A', 'RPS19B', 'RPS20', 'RPS21A', 'RPS21B', 'RPS23A', 'RPS23B', 'RPS24A', 'RPS24B', 'RPS25A', 'RPS25B', 'RPS26A', 'RPS26B', 'RPS27A', 'RPS27B', 'RPS31', 'RPS28A', 'RPS28B', 'RPS29A', 'RPS29B', 'RPS30A', 'RPS30B', 'RPL3', 'RPL4A', 'RPL4B', 'RPL5', 'RPL6A', 'RPL6B', 'RPL7A', 'RPL7B', 'RPL8A', 'RPL8B', 'RPL2A', 'RPL2B', 'RPL9A', 'RPL9B', 'RPL10', 'RPL1A', 'RPL1B', 'RPL11A', 'RPL11B', 'RPL12A', 'RPL12B', 'RPL13A', 'RPL13B', 'RPL16A', 'RPL16B', 'RPL14A', 'RPL14B', 'RPL15A', 'RPL15B', 'RPL17A', 'RPL17B', 'RPL18A', 'RPL18B', 'RPL20A', 'RPL20B', 'RPL19A', 'RPL19B', 'RPL21A', 'RPL21B', 'RPL22A', 'RPL22B', 'RPL23A', 'RPL23B', 'RPL25', 'RPL24A', 'RPL24B', 'RPL26A', 'RPL26B', 'RPL27A', 'RPL27B', 'RPL28', 'RPL29', 'RPL30', 'RPL31A', 'RPL31B', 'RPL32', 'RPL34A', 'RPL34B', 'RPL35A', 'RPL35B', 'RPL33A', 'RPL33B', 'RPL36A', 'RPL36B', 'RPL42A', 'RPL42B', 'RPL37A', 'RPL37B', 'RPL43A', 'RPL43B', 'RPL38', 'RPL39', 'RPL40A', 'RPL40B', 'RPL41A', 'RPL41B', 'RPP0', 'RPP1A', 'RPP1B', 'RPP2A')
+
+# wide_mutatnts holds names for those strains where effects are drastic in many genes
+wide_mutatnts <- c("ccr4", "pop2s", "xrn1pm", "xrn1ns", "dhh1", "not3", "pat1s", "thp2")
+```
+
+```{r}
+#### Building heatmap for the desired gene set from SR, DR and total RNA level data
+
+
+# mostly just ggplot heatmap, but you can change the list of genes to display; significant only...
+heatmap <- function(mydata, genes, significant_only, title) {
+  ggplot(data=mydata %>%
+             filter(Gene %in% genes & (Significance != "not" | significant_only==FALSE)) %>%
+             mutate(Gene = factor(Gene), Log2Fold = LogFold / 0.6931472),
+         aes(x=Strain,y=Gene,fill=Log2Fold)) +
+      scale_fill_gradient2(limits=c(-2,2),oob=scales::squish) +
+      theme(axis.text.x = element_text(size  = 10,
+                          angle = 90,
+                          hjust = 1,
+                          vjust = 0.5),
+            axis.text.y = element_text())+
+      geom_tile(color="black", size=0.2)+
+      ggtitle(title)
+}
+
+
+heatmap(total_data, c(mygenes, myrps), significant_only = FALSE, title = "Total mRNA abundance change")
+heatmap(sr_data, c(mygenes, myrps), significant_only = FALSE, title = "mRNA synthesis rate change")
+heatmap(dr_data, c(mygenes, myrps), significant_only = FALSE, title = "mRNA degradation rate change")
+
+```
+
+
+```{r}
+#### Tying to skew data based on skewness and other features of the within-gene values distribution
+
+# found this function of stackoverflow to get mode from a vecor of values
+getmode <- function(v) {
+   uniqv <- unique(v)
+   return(uniqv[which.max(tabulate(match(v, uniqv)))])
+}
+
+# adds skewness, mode and median columns to the data
+skewmodmed <- function(data) {
+  skew_vector <- vector()
+  mode_vector <- vector()
+  median_vector <- vector()
+  for (gene in unique(data$Gene)) {
+    temp_data <- data[ which(data$Gene==gene), "Log2Fold"]
+    temp_data <- unlist(temp_data, use.names = FALSE)
+    skew_vector <- c(skew_vector, rep(skewness(temp_data), 47))
+    mode <- getmode(temp_data)
+    mode_vector <- c(mode_vector, rep(mode, 47))
+    median <- median(temp_data)
+    median
+    median_vector <- c(median_vector, rep(median, 47))
+  }
+  data$Skeweness <- skew_vector
+  data$Log2FoldMode <- mode_vector
+  data$Median <- median_vector
+  return(data)
+}
+
+dr_data <- skewmodmed(dr_data)
+sr_data <- skewmodmed(sr_data)
+total_data <- skewmodmed(total_data)
+
+# from now you can filter the data according to the skeweness, median and mode values (distribution of Log2Fold values of one gene). An example is below
+dr_data_negskew <- dr_data %>%
+                        filter((Skeweness < -0.6) & (Median < 0.15 & Median > -0.3) & (Log2FoldMode < 0.08 & Log2FoldMode > -0.08))
+
+
+
+```
+
+```{r}
+#### Creating matrices from total mRNA levels, DR and SR data to build heatmaps with pheatmap
+
+
+# SR data matrix
+sr_logfold <- sr_data[, c("ORF", "Strain", "Log2Fold")]
+sr_LF_matrix <- matrix(sr_logfold$Log2Fold, nrow=length(unique(sr_logfold$ORF)), ncol=length(unique(sr_logfold$Strain)), byrow=TRUE)
+rownames(sr_LF_matrix) <- unique(sr_logfold$ORF)
+colnames(sr_LF_matrix) <- unique(sr_logfold$Strain)
+
+# DR data matrix
+dr_logfold <- dr_data[, c("ORF", "Strain", "Log2Fold")]
+dr_LF_matrix <- matrix(dr_logfold$Log2Fold, nrow=length(unique(dr_logfold$ORF)), ncol=length(unique(dr_logfold$Strain)), byrow=TRUE)
+rownames(dr_LF_matrix) <- unique(dr_logfold$ORF)
+colnames(dr_LF_matrix) <- unique(dr_logfold$Strain)
+
+# Total mRNA level data matrix
+total_logfold <- total_data[, c("ORF", "Strain", "Log2Fold")]
+total_LF_matrix <- matrix(total_logfold$Log2Fold, nrow=length(unique(total_logfold$ORF)), ncol=length(unique(total_logfold$Strain)), byrow=TRUE)
+rownames(total_LF_matrix) <- unique(total_logfold$ORF)
+colnames(total_LF_matrix) <- unique(total_logfold$Strain)
+
+# saving SR heatmap into a variable to reorder DR and Total levels data (see below)
+sr_hm <- pheatmap(sr_LF_matrix, scale="row", main="mRNA synthesis rate", cluster_cols=T, cluster_rows=T, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+# saving DR heatmap
+dr_hm <- pheatmap(dr_LF_matrix[-which(apply(dr_LF_matrix,1,function(x)any(is.na(x)))), ], main="mRNA degradation rate", scale="row", cluster_cols=T, cluster_rows=T, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+# saving total mRNA heatmap
+total_hm <- pheatmap(total_LF_matrix, scale="row", main="Total mRNA level", cluster_cols=T, cluster_rows=T, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+```
+
+```{r}
+#### SR data clustering and reordering DR and Total mRNA data
+
+pheatmap(sr_LF_matrix, scale="row", main="mRNA synthesis rate", cluster_cols=T, cluster_rows=T, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+pheatmap(dr_LF_matrix[sr_hm$tree_row[["order"]], sr_hm$tree_col[["order"]]], main="mRNA degradation rate with SR data ordering", scale="row", cluster_cols=F, cluster_rows=F, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+pheatmap(total_LF_matrix[sr_hm$tree_row[["order"]], sr_hm$tree_col[["order"]]], main="Total mRNA level with SR data ordering", scale="row", cluster_cols=F, cluster_rows=F, show_colnames=F, show_rownames=F, fontsize_row = 2)
+
+```
+
+```{r}
+#### DR data clustering and reordering SR and Total mRNA data
+
+
+pheatmap(dr_LF_matrix[-which(apply(dr_LF_matrix,1,function(x)any(is.na(x)))), ], scale="row", main="mRNA degradation rate", cluster_cols=T, cluster_rows=T, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+pheatmap(sr_LF_matrix[dr_hm$tree_row[["order"]], dr_hm$tree_col[["order"]]], main="mRNA syntheis rate with DR data ordering", scale="row", cluster_cols=F, cluster_rows=F, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+pheatmap(total_LF_matrix[dr_hm$tree_row[["order"]], dr_hm$tree_col[["order"]]], main="Total mRNA level with DR data ordering", scale="row", cluster_cols=F, cluster_rows=F, show_colnames=F, show_rownames=F, fontsize_row = 2)
+
+```
+
+
+```{r}
+#### Total mRNA data clustering and reordering SR and DR mRNA data
+
+pheatmap(total_LF_matrix, scale="row", main="Total mRNA level", cluster_cols=T, cluster_rows=T, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+pheatmap(sr_LF_matrix[total_hm$tree_row[["order"]], total_hm$tree_col[["order"]]], main="mRNA syntheis rate with total mRNA level data ordering", scale="row", cluster_cols=F, cluster_rows=F, show_colnames=TRUE, show_rownames=TRUE, fontsize_row = 2)
+
+pheatmap(dr_LF_matrix[total_hm$tree_row[["order"]], total_hm$tree_col[["order"]]], main="Total mRNA level with total mRNA level data ordering", scale="row", cluster_cols=F, cluster_rows=F, show_colnames=F, show_rownames=F, fontsize_row = 2)
+```
+
+```{r}
+#### Dealing with the SR data clusters 
+
+# Slicing SR data in 4 gene clusters acoording to cluster analysis above
+SR_clusters <- cutree(sr_hm$tree_row, k=4)
+
+# retreive gene names from separate clusters
+cluster1 <- names(SR_clusters)[SR_clusters == 1]
+cluster2 <- names(SR_clusters)[SR_clusters == 2]
+cluster3 <- names(SR_clusters)[SR_clusters == 3]
+cluster4 <- names(SR_clusters)[SR_clusters == 4]
+
+# retrieving all the genes in the dataset
+all_genes <- unique(sr_logfold$ORF)
+
+# saving lists of genes in clusters and all-genes in files (to ease the inspection) 
+# unfortunately I don't know the method to say what cluster is what based only on the heatmap... so do it manually, I guess.
+write(cluster1, file="cluster1", ncol=1)
+write(cluster2, file="cluster2", ncol=1)
+write(cluster3, file="cluster3", ncol=1)
+write(cluster4, file="cluster4", ncol=1)
+write(all_genes, file="all_genes", ncol=1)
+
+```
+
+
+```{r}
+#### Performing Gene Ontology (GO) enrichment analysis 
+
+mapped_genes <- mappedkeys(org.Sc.sgdGENENAME)
+
+# function to ease GO enrichment analysis of the desired clusters
+EnGO <- function(allgenes, cluster) {
+  # cluster must be an integer number (index of the cluster)
+  # allgenes must be a named vector, values - cluster nember, names - genes
+  
+  topDiffGenes <- function(allScore) {
+    return(allScore == cluster)
+  }
+  
+  
+  GOdata <- 
+      new("topGOdata",
+          ontology = "CC",
+          allGenes = allgenes,
+          geneSel = topDiffGenes,
+          nodeSize = 10,
+          annot = annFUN.org,
+          mapping = GOLib,
+          ID = "ensembl")
+  
+  # Run a Fisher's exact test
+  resultFis_CC <- runTest(GOdata, "classic", "fisher")
+  resultFis_CC
+  # Generate results table
+  tableFis_CC <- GenTable(GOdata_CC, pValue = resultFis_CC, 
+                          topNodes = topNodes, numChar = numChar)
+  return(tableFis_CC)
+}
+
+EnGO(SR_clusters, 1)
+EnGO(SR_clusters, 2)
+EnGO(SR_clusters, 3)
+EnGO(SR_clusters, 4)
+
+
+
+```
+
+
+
